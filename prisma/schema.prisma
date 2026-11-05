@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 订阅/订单记录：打开支付弹窗即生成 PENDING 订单（订单号凭证），
+// 用户扫码付款并确认后置为 ACTIVE。个人收款码无回调，订单留档便于人工对账。
+model Subscription {
+  id          String    @id @default(cuid())
+  orderNo     String    @unique // 订单号（PL+日期+随机），付款凭证
+  plan        String    @default("pro") // 目前仅 pro
+  channel     String // wechat | alipay
+  months      Int // 1 | 12
+  amountCNY   Float // 应付金额（人民币）
+  payerNote   String    @default("") // 付款人姓名/备注（用户自填，建议含订单尾号）
+  status      String    @default("PENDING") // PENDING | ACTIVE
+  deviceId    String    @default("") // 激活设备标识
+  createdAt   DateTime  @default(now())
+  activatedAt DateTime?
+  expiresAt   DateTime?
+}
+
+// 聚合资讯：多源 RSS 入库去重，随时间动态增多
+model NewsArticle {
+  id          String   @id @default(cuid())
+  guid        String   @unique // RSS guid / link 哈希，去重键
+  title       String
+  url         String
+  publisher   String // 媒体名（Google News source 标签 / feed 名）
+  source      String // feed 标识：google-zh / yahoo / cnbc / marketwatch ...
+  lang        String // zh | en | ja
+  symbol      String? // 关联股票代码（公司新闻，可空）
+  publishedAt DateTime
+  fetchedAt   DateTime @default(now())
+
+  @@index([publishedAt])
+  @@index([symbol, publishedAt])
+  @@index([lang, publishedAt])
+}
+
+// 宏观周期快照（按季度）
+model MacroSnapshot {
+  id        String @id @default(cuid())
+  period    String @unique // 例如 "2023Q1"
+  gdpGrowth Float  // GDP 同比 %
+  cpi       Float  // CPI 同比 %
+  pmi       Float  // 制造业 PMI
+  yield10Y  Float  // 10 年期国债收益率 %
+  m2Growth  Float  // M2 同比 %
+  phase     String // recovery | overheating | stagflation | recession
+}
+
+// 行业
+model Industry {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  name        String
+  lifecycle   String // 引入期 | 成长期 | 成熟期 | 衰退期
+  cyclicality String // 强周期 | 弱周期 | 逆周期
+  summary     String
+  pest        String // JSON: {political, economic, social, technological}
+  porter      String // JSON: {rivalry, suppliers, buyers, entrants, substitutes} 0-100
+  chain       String // JSON: {upstream[], midstream[], downstream[]}
+  leaders     String // JSON: string[]
+  avgPe       Float
+  growthYoY   Float
+  prosperity  Float // 景气指数 0-100
+  companies   Company[]
+}
+
+// 企业（覆盖一级市场天使/VC/PE 与二级市场上市公司）
+model Company {
+  id            String    @id @default(cuid())
+  ticker        String    @unique
+  name          String
+  industryId    String
+  industry      Industry  @relation(fields: [industryId], references: [id])
+  stage         String // 初创期 | 成长期 | 成熟期 | 衰退期
+  round         String // 天使轮 | A轮 | B轮 | PE轮(Pre-IPO) | 已上市
+  listed        Boolean
+  marketCapE8   Float // 市值/估值（亿元）
+  price         Float // 股价（元），未上市为 0
+  chg1Y         Float // 近一年涨跌幅 %
+  pe            Float? // 市盈率，亏损为 null
+  pb            Float
+  psTtm         Float?
+  roe           Float
+  grossMargin   Float
+  netMargin     Float
+  debtRatio     Float
+  revenueGrowth Float
+  profitGrowth  Float
+  dividendYield Float?
+  moatType      String
+  moatScore     Float // 0-10
+  moatDesc      String
+  finHistory    String // JSON: [{year, revenueE8, profitE8}]
+  priceState    String // JSON: {trend, phase, volume, support, resistance, maSignal}
+  quantFactors  String // JSON: {momentum, value, quality, growth} 0-100
+  signals       String // JSON: {dow:{label,score,reason}, value:{...}, fundamental:{...}, quant:{...}}
+  overall       String // 强烈看多 | 看多 | 中性 | 看空 | 强烈看空
+  overallScore  Float // 0-100
+  confidence    Float // 0-100
+  desc          String
+  tags          String // JSON: string[]
+  foundedYear   Int
+}

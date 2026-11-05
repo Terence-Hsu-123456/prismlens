@@ -1,0 +1,18 @@
+{
+  "name": "棱镜投研 PrismLens",
+  "short_name": "棱镜投研",
+  "description": "宏观 · 行业 · 企业，三重透镜看穿投资的每一层。覆盖天使轮、VC/PE 到二级市场的四维决策引擎与智能筛股。",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
