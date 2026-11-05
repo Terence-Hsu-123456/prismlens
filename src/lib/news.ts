@@ -182,6 +182,19 @@ const FEED_LABEL: Record<string, string> = {
 }
 
 // ---------- 抓取与入库 ----------
+/** 按 XML 声明解码 RSS；避免响应头 charset 误标（如标成 ISO-8859-1）导致中文/引号乱码 */
+function decodeRss(buf: ArrayBuffer): string {
+  const head = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buf.slice(0, 256)))
+  const m = head.match(/encoding\s*=\s*["']?([\w-]+)/i)
+  const enc = (m?.[1] ?? 'utf-8').toLowerCase()
+  const decoder = enc.includes('gb') ? 'gbk' : 'utf-8'
+  try {
+    return new TextDecoder(decoder, { fatal: false }).decode(buf)
+  } catch {
+    return new TextDecoder('utf-8', { fatal: false }).decode(buf)
+  }
+}
+
 async function fetchFeed(feed: FeedDef): Promise<RawItem[]> {
   try {
     const res = await fetch(feed.url, {
@@ -190,7 +203,7 @@ async function fetchFeed(feed: FeedDef): Promise<RawItem[]> {
       cache: 'no-store',
     })
     if (!res.ok) return []
-    const xml = await res.text()
+    const xml = decodeRss(await res.arrayBuffer())
     return parseFeed(xml, feed)
   } catch {
     return []
