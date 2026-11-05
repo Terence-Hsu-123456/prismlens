@@ -1,9 +1,7 @@
-// 服务端筛股引擎：拉取真实公司池行情 → 结构化 → 过滤（腾讯主源 + Yahoo 补全）
-import { cached } from './cache'
-import { getQuotes, type YQuote } from './quotes'
-import { UNIVERSE, MARKET_CURRENCY } from './universe'
-import { toUSD } from './format'
-import { getFundamentals, ensureFundamentals } from './fundamentals'
+// 服务端筛股引擎（DB 版）：公司池存于 SQLite（screen-sync 全市场动态同步），
+// 本模块负责把筛选条件编译为 Prisma 查询 + 分页 + 语义筛股所需的内存过滤
+import { db } from '@/lib/db'
+import type { Prisma } from '@prisma/client'
 
 export type ScreenRow = {
   symbol: string
@@ -15,10 +13,11 @@ export type ScreenRow = {
   sector: string
   stage: string
   tags: string[]
-  price: number
+  price: number | null
   currency: string
   changePercent: number | null
   marketCap: number | null
+  capUsd: number | null
   pe: number | null
   pb: number | null
   dividendYield: number | null
@@ -27,61 +26,6 @@ export type ScreenRow = {
   revenueGrowth: number | null // %
   asOf: number
   degraded: boolean
-}
-
-function dividendOf(q: YQuote): number | null {
-  if (typeof q.trailingAnnualDividendYield === 'number') return q.trailingAnnualDividendYield * 100
-  if (typeof q.dividendYield === 'number') {
-    // 不同市场字段口径不同：部分返回小数，部分直接是百分比
-    return q.dividendYield > 0 && q.dividendYield < 1 ? q.dividendYield * 100 : q.dividendYield
-  }
-  return null
-}
-
-export async function loadUniverseRows() {
-  return cached('universe:rows:v3', 60_000, async () => {
-    const syms = UNIVERSE.map((u) => u.s)
-    let quotes: Record<string, YQuote> = {}
-    try {
-      quotes = await getQuotes(syms)
-    } catch {
-      quotes = {}
-    }
-    const rows: ScreenRow[] = []
-    for (const u of UNIVERSE) {
-      const q = quotes[u.s]
-      if (!q || typeof q.regularMarketPrice !== 'number' || !isFinite(q.regularMarketPrice)) continue
-      const f = getFundamentals(u.s)
-      rows.push({
-        symbol: u.s,
-        nameZh: u.n.zh,
-        nameEn: u.n.en,
-        nameJa: u.n.ja ?? u.n.en,
-        market: u.mkt,
-        country: u.ctry,
-        sector: u.sec,
-        stage: u.stage,
-        tags: u.tags,
-        price: q.regularMarketPrice,
-        currency: q.currency ?? u.cur ?? MARKET_CURRENCY[u.mkt],
-        changePercent: typeof q.regularMarketChangePercent === 'number' ? q.regularMarketChangePercent : null,
-        marketCap: typeof q.marketCap === 'number' ? q.marketCap : null,
-        pe: typeof q.trailingPE === 'number' ? q.trailingPE : null,
-        pb: typeof q.priceToBook === 'number' && q.priceToBook > 0 ? q.priceToBook : null,
-        dividendYield: dividendOf(q),
-        roe: f.roe != null ? f.roe * 100 : null,
-        profitMargin: f.profitMargin != null ? f.profitMargin * 100 : null,
-        revenueGrowth: f.revenueGrowth != null ? f.revenueGrowth * 100 : null,
-        asOf: typeof q.regularMarketTime === 'number' ? q.regularMarketTime * 1000 : Date.now(),
-        degraded: !!q._degraded,
-      })
-    }
-    // 缺财务指标的标的 → 后台泵逐只预取（下次刷新渐次补齐，不阻塞本次响应）
-    ensureFundamentals(syms)
-    // 若可用报价少于公司池六成，标记降级（数据源波动）
-    const degraded = rows.length < syms.length * 0.6
-    return { rows, asOf: Date.now(), degraded }
-  })
 }
 
 export type Filters = {
@@ -98,6 +42,129 @@ export type Filters = {
   kw?: string
 }
 
+type DbRow = {
+  symbol: string
+  market: string
+  nameZh: string
+  nameEn: string
+  nameJa: string
+  country: string
+  sector: string | null
+  stage: string
+  tags: string
+  price: number | null
+  currency: string
+  changePercent: number | null
+  marketCap: number | null
+  capUsd: number | null
+  pe: number | null
+  pb: number | null
+  dividendYield: number | null
+  roe: number | null
+  profitMargin: number | null
+  revenueGrowth: number | null
+}
+
+function rowOf(r: DbRow): ScreenRow {
+  let tags: string[] = []
+  try {
+    tags = JSON.parse(r.tags) as string[]
+  } catch {
+    tags = []
+  }
+  return {
+    symbol: r.symbol,
+    nameZh: r.nameZh,
+    nameEn: r.nameEn || r.nameZh,
+    nameJa: r.nameJa || r.nameEn || r.nameZh,
+    market: r.market,
+    country: r.country,
+    sector: r.sector ?? '',
+    stage: r.stage,
+    tags,
+    price: r.price,
+    currency: r.currency,
+    changePercent: r.changePercent,
+    marketCap: r.marketCap,
+    capUsd: r.capUsd,
+    pe: r.pe,
+    pb: r.pb,
+    dividendYield: r.dividendYield,
+    roe: r.roe,
+    profitMargin: r.profitMargin,
+    revenueGrowth: r.revenueGrowth,
+    asOf: Date.now(),
+    degraded: false,
+  }
+}
+
+function whereOf(f: Filters): Prisma.ScreenCompanyWhereInput {
+  const w: Prisma.ScreenCompanyWhereInput = {}
+  if (f.market && f.market !== 'ALL') w.market = f.market
+  if (f.sector && f.sector !== 'ALL') w.sector = f.sector
+  if (f.stage && f.stage !== 'ALL') w.stage = f.stage
+  if (f.capMinUSD) w.capUsd = { gte: f.capMinUSD } // 0/null = 不限（保留无市值数据行）
+  if (f.peMax != null) w.pe = { gt: 0, lte: f.peMax }
+  if (f.pbMax != null) w.pb = { gt: 0, lte: f.pbMax }
+  if (f.divMin != null && f.divMin > 0) w.dividendYield = { gte: f.divMin }
+  if (f.roeMin != null) w.roe = { gte: f.roeMin }
+  if (f.pmMin != null) w.profitMargin = { gte: f.pmMin }
+  if (f.revMin != null) w.revenueGrowth = { gte: f.revMin }
+  const kw = (f.kw ?? '').trim().toLowerCase()
+  if (kw) {
+    w.OR = [
+      { symbol: { contains: kw } },
+      { nameZh: { contains: kw } },
+      { nameEn: { contains: kw } },
+      { nameJa: { contains: kw } },
+      { tags: { contains: kw } },
+    ]
+  }
+  return w
+}
+
+export type ScreenResult = {
+  rows: ScreenRow[]
+  total: number
+  universeSize: number
+  asOf: number
+  degraded: boolean
+  syncing: boolean
+  lastSyncAt: number
+}
+
+// 分页查询（前端主接口）
+export async function queryScreener(f: Filters, limit = 50, offset = 0): Promise<ScreenResult> {
+  const where = whereOf(f)
+  const [dbRows, total, universeSize, last] = await Promise.all([
+    db.screenCompany.findMany({ where, orderBy: [{ capUsd: 'desc' }, { symbol: 'asc' }], take: Math.min(Math.max(limit, 1), 100), skip: Math.max(offset, 0) }),
+    db.screenCompany.count({ where }),
+    db.screenCompany.count(),
+    db.syncState.findUnique({ where: { key: 'screen:lastSync' } }),
+  ])
+  return {
+    rows: dbRows.map(rowOf),
+    total,
+    universeSize,
+    asOf: last?.at.getTime() ?? Date.now(),
+    degraded: false,
+    syncing: false,
+    lastSyncAt: last?.at.getTime() ?? 0,
+  }
+}
+
+// 批量取行（AI 语义筛股：一次取回候选，再做关键词/放宽循环）
+export async function queryRows(f: Filters, maxRows = 4000): Promise<ScreenRow[]> {
+  const where = whereOf(f)
+  const dbRows = await db.screenCompany.findMany({
+    where,
+    orderBy: [{ capUsd: 'desc' }, { symbol: 'asc' }],
+    take: maxRows,
+  })
+  return dbRows.map(rowOf)
+}
+
+// JS 内存过滤（语义筛股的放宽循环用）
 export function applyFilters(rows: ScreenRow[], f: Filters): ScreenRow[] {
   const kw = (f.kw ?? '').trim().toLowerCase()
   return rows
@@ -106,8 +173,7 @@ export function applyFilters(rows: ScreenRow[], f: Filters): ScreenRow[] {
       if (f.sector && f.sector !== 'ALL' && r.sector !== f.sector) return false
       if (f.stage && f.stage !== 'ALL' && r.stage !== f.stage) return false
       if (f.capMinUSD) {
-        const usd = toUSD(r.marketCap, r.currency)
-        if (usd == null || usd < f.capMinUSD) return false
+        if (r.capUsd == null || r.capUsd < f.capMinUSD) return false
       }
       if (f.peMax != null) {
         if (r.pe == null || r.pe <= 0 || r.pe > f.peMax) return false
@@ -133,5 +199,5 @@ export function applyFilters(rows: ScreenRow[], f: Filters): ScreenRow[] {
       }
       return true
     })
-    .sort((a, b) => (toUSD(b.marketCap, b.currency) ?? 0) - (toUSD(a.marketCap, a.currency) ?? 0))
+    .sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0))
 }

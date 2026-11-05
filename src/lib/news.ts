@@ -103,6 +103,18 @@ function textOf(v: any): string {
   return String(x).trim()
 }
 
+// 上游 RSS 若以 ISO-8859-1 声明/传输 UTF-8 字节，会产出 â€™ 这类 mojibake；此处尝试反转修复
+function fixMojibake(s: string): string {
+  if (!/[\u00C2\u00C3\u00E2][\u0080-\u00BF]/.test(s)) return s
+  try {
+    const bytes = Uint8Array.from(Array.from(s, (ch) => ch.charCodeAt(0) & 0xff))
+    const fixed = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    return fixed && !fixed.includes('\uFFFD') ? fixed : s
+  } catch {
+    return s
+  }
+}
+
 function hashGuid(link: string): string {
   return 'h' + createHash('sha1').update(link).digest('hex').slice(0, 20)
 }
@@ -159,7 +171,7 @@ function parseFeed(xml: string, feed: FeedDef): RawItem[] {
       const guidRaw = textOf(it.guid) || link
       out.push({
         guid: guidRaw.startsWith('http') ? hashGuid(guidRaw) : guidRaw || hashGuid(link),
-        title: cleanTitle.slice(0, 300),
+        title: fixMojibake(cleanTitle).slice(0, 300),
         url: link.slice(0, 500),
         publisher: publisher.slice(0, 80),
         publishedAt,
@@ -330,7 +342,7 @@ export async function listNews(opts: {
   return {
     items: (rows as NewsRow[]).map((r) => ({
       id: r.id,
-      title: r.title,
+      title: fixMojibake(r.title),
       url: r.url,
       publisher: r.publisher,
       source: r.source,

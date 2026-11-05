@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { isLang, type Lang } from './i18n'
 
-export type TabKey = 'markets' | 'company' | 'screener' | 'news' | 'pricing'
+export type TabKey = 'markets' | 'company' | 'screener' | 'primary' | 'news' | 'pricing'
 export type Plan = 'free' | 'pro'
 
 function lsSet(k: string, v: string) {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { Activity, Building2, Crown, Newspaper, SlidersHorizontal } from 'lucide-react'
+import { Activity, Building2, Crown, Newspaper, Rocket, SlidersHorizontal } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import Header from '@/components/invest/header'
@@ -10,6 +10,7 @@ import TickerTape from '@/components/invest/ticker-tape'
 import MarketsPanel from '@/components/invest/markets-panel'
 import CompanyPanel from '@/components/invest/company-panel'
 import ScreenerPanel from '@/components/invest/screener-panel'
+import PrimaryMarketPanel from '@/components/invest/primary-market-panel'
 import { NewsFlow } from '@/components/invest/news-flow'
 import PricingPanel from '@/components/invest/pricing-panel'
 import SubscribeDialog from '@/components/invest/subscribe-dialog'
@@ -32,6 +33,7 @@ export default function Home() {
     { key: 'markets', label: t('nav.markets'), icon: <Activity className="h-4 w-4" /> },
     { key: 'company', label: t('nav.company'), icon: <Building2 className="h-4 w-4" /> },
     { key: 'screener', label: t('nav.screener'), icon: <SlidersHorizontal className="h-4 w-4" /> },
+    { key: 'primary', label: t('nav.primary'), icon: <Rocket className="h-4 w-4" /> },
     { key: 'news', label: t('nav.news'), icon: <Newspaper className="h-4 w-4" /> },
     { key: 'pricing', label: t('nav.pricing'), icon: <Crown className="h-4 w-4" /> },
   ]
@@ -105,6 +107,9 @@ export default function Home() {
             </TabsContent>
             <TabsContent value="screener" className="mt-7 focus-visible:outline-none">
               <ScreenerPanel />
+            </TabsContent>
+            <TabsContent value="primary" className="mt-7 focus-visible:outline-none">
+              <PrimaryMarketPanel />
             </TabsContent>
             <TabsContent value="news" className="mt-7 focus-visible:outline-none">
               <NewsFlow />

@@ -1,5 +1,7 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // 本地 = native；Vercel（Amazon Linux 2023 / OpenSSL 3）需要额外引擎包
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
@@ -70,6 +72,66 @@ model Industry {
   growthYoY   Float
   prosperity  Float // 景气指数 0-100
   companies   Company[]
+}
+
+// 选股器公司池：全球市场动态同步（新浪A股 / HKEX官方名单 / Nasdaq官方筛选器 / 腾讯行情 / 人工精选）
+// 新股上市后随每日名单自动入库，退市后自动清理 —— 动态化
+model ScreenCompany {
+  symbol        String   @id // 统一 Yahoo 风格代码：600519.SS / 0700.HK / AAPL
+  market        String // US | CN | HK | JP | KR | IN | EU
+  nameZh        String
+  nameEn        String   @default("")
+  nameJa        String   @default("")
+  country       String   @default("")
+  sector        String? // tech/consumer/finance/health/energy/industrial/materials/utility/comm/realestate；未知为 null
+  stage         String   @default("growth") // startup | growth | mature | turnaround
+  tags          String   @default("[]") // JSON string[]（定性搜索用，含行业名等）
+  price         Float? // 现价（本币）；暂无行情为 null
+  currency      String   @default("USD")
+  changePercent Float?
+  marketCap     Float? // 市值（本币）
+  capUsd        Float? // 市值（USD 折算），用于统一排序/筛选
+  pe            Float?
+  pb            Float?
+  dividendYield Float? // %
+  roe           Float? // %
+  profitMargin  Float? // %
+  revenueGrowth Float? // %
+  source        String   @default("bulk") // bulk（全量源）| curated（人工精选，永不清理）
+  seenAt        DateTime @default(now()) // 最近一次同步见到（退市清理依据）
+  updatedAt     DateTime @updatedAt
+
+  @@index([market, capUsd])
+  @@index([sector])
+  @@index([stage])
+}
+
+// 同步状态（各市场/名单最后同步时间与信息）
+model SyncState {
+  key  String   @id
+  at   DateTime
+  info String   @default("")
+}
+
+// 一级市场融资轮次（天使轮/VC/PE，公开报道整理，随市场动态补充）
+model FundingRound {
+  id            String   @id @default(cuid())
+  company       String // 公司名（中文）
+  companyEn     String   @default("")
+  market        String // CN | US | EU | JP | IN | OTHER
+  sector        String // 行业 key（同 ScreenCompany）
+  stage         String // angel | seed | a | b | c | pe | preipo
+  roundLabel    String // 天使轮 / A轮 / B轮 / C轮 / PE轮 / Pre-IPO（展示用）
+  date          String // 披露时间 YYYY-MM
+  amountUsd     Float? // 披露金额（美元）；未披露为 null
+  valuationUsd  Float? // 投后估值（美元，约）；未披露为 null
+  leadInvestors String   @default("") // 领投方
+  desc          String   @default("") // 一句话简介
+  tags          String   @default("[]") // JSON string[]
+  createdAt     DateTime @default(now())
+
+  @@index([stage, date])
+  @@index([market])
 }
 
 // 企业（覆盖一级市场天使/VC/PE 与二级市场上市公司）
