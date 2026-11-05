@@ -2,7 +2,15 @@
 // 全部 RSS 入库去重（NewsArticle），随时间不断增量增多；支持全局流与个股公司流
 import { createHash } from 'crypto'
 import { XMLParser } from 'fast-xml-parser'
-import { db } from '@/lib/db'
+import {
+  newsCount,
+  newsDeleteBefore,
+  newsExistingGuids,
+  newsInsert,
+  newsList,
+  newsPublisherCount,
+  type NewsRow,
+} from '@/lib/news-store'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -207,40 +215,25 @@ async function ingest(feeds: FeedDef[], symbol: string | null): Promise<number> 
 
   // 过滤已存在的 guid
   const guids = all.map((a) => a.guid)
-  const existed = await db.newsArticle.findMany({
-    where: { guid: { in: guids } },
-    select: { guid: true },
-  })
-  const existedSet = new Set(existed.map((e) => e.guid))
+  const existedSet = await newsExistingGuids(guids)
   const fresh = all.filter((a) => !existedSet.has(a.guid))
   if (!fresh.length) return 0
 
-  // SQLite 写入串行更稳（避免锁竞争）
-  let inserted = 0
-  for (const a of fresh) {
-    try {
-      await db.newsArticle.create({
-        data: {
-          guid: a.guid,
-          title: a.title,
-          url: a.url,
-          publisher: a.publisher,
-          source: a.source,
-          lang: a.lang,
-          symbol,
-          publishedAt: a.publishedAt,
-        },
-      })
-      inserted++
-    } catch {
-      // guid 冲突等忽略
-    }
-  }
+  const inserted = await newsInsert(
+    fresh.map((a) => ({
+      guid: a.guid,
+      title: a.title,
+      url: a.url,
+      publisher: a.publisher,
+      source: a.source,
+      lang: a.lang,
+      symbol,
+      publishedAt: a.publishedAt,
+    })),
+  )
   // 清理 14 天前的旧资讯，保持库轻量
   if (inserted > 0 && Math.random() < 0.2) {
-    db.newsArticle
-      .deleteMany({ where: { publishedAt: { lt: new Date(Date.now() - 14 * 86400_000) } } })
-      .catch(() => {})
+    newsDeleteBefore(new Date(Date.now() - 14 * 86400_000)).catch(() => {})
   }
   return inserted
 }
@@ -283,10 +276,13 @@ export function refreshCompanyNews(symbol: string, name: string, force = false):
   return p
 }
 
-/** 冷启动：库内全局资讯不足时同步等待一次 */
+/** 冷启动：库内全局资讯不足时同步等待一次（带等待上限，避免请求长时间挂起） */
 export async function ensureGlobalNews(): Promise<void> {
-  const total = await db.newsArticle.count({ where: { symbol: null } })
-  if (total < 80) await refreshGlobalNews(true)
+  const total = await newsCount({ symbol: null })
+  if (total >= 80) return
+  const p = refreshGlobalNews(true)
+  // 最多阻塞 6 秒；超出后让抓取在后台继续，后续请求即可命中已入库的数据
+  await Promise.race([p, new Promise<void>((resolve) => setTimeout(resolve, 6000))])
 }
 
 export type NewsItem = {
@@ -312,18 +308,14 @@ export async function listNews(opts: {
     ...(lang !== 'all' ? { lang } : {}),
     ...(symbol ? { symbol: symbol.toUpperCase() } : {}),
   }
+  const skip = Math.max(0, (page - 1) * pageSize)
   const [total, publishers, rows] = await Promise.all([
-    db.newsArticle.count({ where }),
-    db.newsArticle.groupBy({ by: ['publisher'], where, _count: { _all: true } }),
-    db.newsArticle.findMany({
-      where,
-      orderBy: { publishedAt: 'desc' },
-      skip: Math.max(0, (page - 1) * pageSize),
-      take: pageSize,
-    }),
+    newsCount(where),
+    newsPublisherCount(where),
+    newsList(where, skip, pageSize),
   ])
   return {
-    items: rows.map((r) => ({
+    items: (rows as NewsRow[]).map((r) => ({
       id: r.id,
       title: r.title,
       url: r.url,
@@ -335,6 +327,6 @@ export async function listNews(opts: {
     })),
     total,
     hasMore: page * pageSize < total,
-    publishers: publishers.length,
+    publishers,
   }
 }
