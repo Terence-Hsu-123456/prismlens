@@ -1,6 +1,5 @@
-// 真实公司池：覆盖 美国 / 中国A股 / 香港 / 日本 / 韩国 / 印度 / 欧洲 七大市场
-// 全部为真实上市公司的真实代码（Yahoo Finance 代码格式）
-export type MarketKey = 'US' | 'CN' | 'HK' | 'JP' | 'KR' | 'IN' | 'EU'
+// 真实公司池：覆盖 美国 / 中国A股 / 香港 / 日本 / 韩国 / 印度 / 欧洲 + 亚太/美洲/中东非其他（全量动态同步）
+export type MarketKey = 'US' | 'CN' | 'HK' | 'JP' | 'KR' | 'IN' | 'EU' | 'AP' | 'AM' | 'MEA'
 export type SectorKey =
   | 'tech' | 'consumer' | 'finance' | 'health' | 'energy'
   | 'industrial' | 'materials' | 'utility' | 'comm' | 'realestate'
@@ -25,6 +24,9 @@ export const MARKETS: { key: MarketKey; flag: string; label: { zh: string; en: s
   { key: 'KR', flag: '🇰🇷', label: { zh: '韩国', en: 'South Korea', ja: '韓国' } },
   { key: 'IN', flag: '🇮🇳', label: { zh: '印度', en: 'India', ja: 'インド' } },
   { key: 'EU', flag: '🇪🇺', label: { zh: '欧洲', en: 'Europe', ja: '欧州' } },
+  { key: 'AP', flag: '🌏', label: { zh: '亚太其他', en: 'Asia-Pacific (Other)', ja: 'アジア太平洋' } },
+  { key: 'AM', flag: '🌎', label: { zh: '美洲其他', en: 'Americas (Other)', ja: '南北アメリカ' } },
+  { key: 'MEA', flag: '🌍', label: { zh: '中东非洲', en: 'Middle East & Africa', ja: '中東・アフリカ' } },
 ]
 
 export const SECTORS: { key: SectorKey; label: { zh: string; en: string; ja: string } }[] = [
@@ -48,7 +50,7 @@ export const STAGES: { key: StageKey; label: { zh: string; en: string; ja: strin
 ]
 
 export const MARKET_CURRENCY: Record<MarketKey, string> = {
-  US: 'USD', CN: 'CNY', HK: 'HKD', JP: 'JPY', KR: 'KRW', IN: 'INR', EU: 'EUR',
+  US: 'USD', CN: 'CNY', HK: 'HKD', JP: 'JPY', KR: 'KRW', IN: 'INR', EU: 'EUR', AP: 'USD', AM: 'USD', MEA: 'USD',
 }
 
 export const UNIVERSE: UItem[] = [

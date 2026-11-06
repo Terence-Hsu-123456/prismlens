@@ -16,7 +16,6 @@ export async function GET(req: NextRequest) {
   const offset = Math.max(parseInt(sp.get('offset') ?? '0', 10) || 0, 0)
   try {
     // TTL 到期自动后台刷新（新股入库/退市清理），不阻塞响应
-    // Vercel 上数据层为只读 SQLite 快照，跳过写库型同步
     if (!process.env.VERCEL) void ensureScreenSync()
     const result = await queryScreener(
       {

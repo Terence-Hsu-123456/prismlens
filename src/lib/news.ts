@@ -2,15 +2,7 @@
 // 全部 RSS 入库去重（NewsArticle），随时间不断增量增多；支持全局流与个股公司流
 import { createHash } from 'crypto'
 import { XMLParser } from 'fast-xml-parser'
-import {
-  newsCount,
-  newsDeleteBefore,
-  newsExistingGuids,
-  newsInsert,
-  newsList,
-  newsPublisherCount,
-  type NewsRow,
-} from '@/lib/news-store'
+import { db } from '@/lib/db'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -103,18 +95,6 @@ function textOf(v: any): string {
   return String(x).trim()
 }
 
-// 上游 RSS 若以 ISO-8859-1 声明/传输 UTF-8 字节，会产出 â€™ 这类 mojibake；此处尝试反转修复
-function fixMojibake(s: string): string {
-  if (!/[\u00C2\u00C3\u00E2][\u0080-\u00BF]/.test(s)) return s
-  try {
-    const bytes = Uint8Array.from(Array.from(s, (ch) => ch.charCodeAt(0) & 0xff))
-    const fixed = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-    return fixed && !fixed.includes('\uFFFD') ? fixed : s
-  } catch {
-    return s
-  }
-}
-
 function hashGuid(link: string): string {
   return 'h' + createHash('sha1').update(link).digest('hex').slice(0, 20)
 }
@@ -171,7 +151,7 @@ function parseFeed(xml: string, feed: FeedDef): RawItem[] {
       const guidRaw = textOf(it.guid) || link
       out.push({
         guid: guidRaw.startsWith('http') ? hashGuid(guidRaw) : guidRaw || hashGuid(link),
-        title: fixMojibake(cleanTitle).slice(0, 300),
+        title: cleanTitle.slice(0, 300),
         url: link.slice(0, 500),
         publisher: publisher.slice(0, 80),
         publishedAt,
@@ -194,19 +174,6 @@ const FEED_LABEL: Record<string, string> = {
 }
 
 // ---------- 抓取与入库 ----------
-/** 按 XML 声明解码 RSS；避免响应头 charset 误标（如标成 ISO-8859-1）导致中文/引号乱码 */
-function decodeRss(buf: ArrayBuffer): string {
-  const head = new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(buf.slice(0, 256)))
-  const m = head.match(/encoding\s*=\s*["']?([\w-]+)/i)
-  const enc = (m?.[1] ?? 'utf-8').toLowerCase()
-  const decoder = enc.includes('gb') ? 'gbk' : 'utf-8'
-  try {
-    return new TextDecoder(decoder, { fatal: false }).decode(buf)
-  } catch {
-    return new TextDecoder('utf-8', { fatal: false }).decode(buf)
-  }
-}
-
 async function fetchFeed(feed: FeedDef): Promise<RawItem[]> {
   try {
     const res = await fetch(feed.url, {
@@ -215,7 +182,7 @@ async function fetchFeed(feed: FeedDef): Promise<RawItem[]> {
       cache: 'no-store',
     })
     if (!res.ok) return []
-    const xml = decodeRss(await res.arrayBuffer())
+    const xml = await res.text()
     return parseFeed(xml, feed)
   } catch {
     return []
@@ -240,25 +207,40 @@ async function ingest(feeds: FeedDef[], symbol: string | null): Promise<number> 
 
   // 过滤已存在的 guid
   const guids = all.map((a) => a.guid)
-  const existedSet = await newsExistingGuids(guids)
+  const existed = await db.newsArticle.findMany({
+    where: { guid: { in: guids } },
+    select: { guid: true },
+  })
+  const existedSet = new Set(existed.map((e) => e.guid))
   const fresh = all.filter((a) => !existedSet.has(a.guid))
   if (!fresh.length) return 0
 
-  const inserted = await newsInsert(
-    fresh.map((a) => ({
-      guid: a.guid,
-      title: a.title,
-      url: a.url,
-      publisher: a.publisher,
-      source: a.source,
-      lang: a.lang,
-      symbol,
-      publishedAt: a.publishedAt,
-    })),
-  )
+  // SQLite 写入串行更稳（避免锁竞争）
+  let inserted = 0
+  for (const a of fresh) {
+    try {
+      await db.newsArticle.create({
+        data: {
+          guid: a.guid,
+          title: a.title,
+          url: a.url,
+          publisher: a.publisher,
+          source: a.source,
+          lang: a.lang,
+          symbol,
+          publishedAt: a.publishedAt,
+        },
+      })
+      inserted++
+    } catch {
+      // guid 冲突等忽略
+    }
+  }
   // 清理 14 天前的旧资讯，保持库轻量
   if (inserted > 0 && Math.random() < 0.2) {
-    newsDeleteBefore(new Date(Date.now() - 14 * 86400_000)).catch(() => {})
+    db.newsArticle
+      .deleteMany({ where: { publishedAt: { lt: new Date(Date.now() - 14 * 86400_000) } } })
+      .catch(() => {})
   }
   return inserted
 }
@@ -301,13 +283,10 @@ export function refreshCompanyNews(symbol: string, name: string, force = false):
   return p
 }
 
-/** 冷启动：库内全局资讯不足时同步等待一次（带等待上限，避免请求长时间挂起） */
+/** 冷启动：库内全局资讯不足时同步等待一次 */
 export async function ensureGlobalNews(): Promise<void> {
-  const total = await newsCount({ symbol: null })
-  if (total >= 80) return
-  const p = refreshGlobalNews(true)
-  // 最多阻塞 6 秒；超出后让抓取在后台继续，后续请求即可命中已入库的数据
-  await Promise.race([p, new Promise<void>((resolve) => setTimeout(resolve, 6000))])
+  const total = await db.newsArticle.count({ where: { symbol: null } })
+  if (total < 80) await refreshGlobalNews(true)
 }
 
 export type NewsItem = {
@@ -333,16 +312,20 @@ export async function listNews(opts: {
     ...(lang !== 'all' ? { lang } : {}),
     ...(symbol ? { symbol: symbol.toUpperCase() } : {}),
   }
-  const skip = Math.max(0, (page - 1) * pageSize)
   const [total, publishers, rows] = await Promise.all([
-    newsCount(where),
-    newsPublisherCount(where),
-    newsList(where, skip, pageSize),
+    db.newsArticle.count({ where }),
+    db.newsArticle.groupBy({ by: ['publisher'], where, _count: { _all: true } }),
+    db.newsArticle.findMany({
+      where,
+      orderBy: { publishedAt: 'desc' },
+      skip: Math.max(0, (page - 1) * pageSize),
+      take: pageSize,
+    }),
   ])
   return {
-    items: (rows as NewsRow[]).map((r) => ({
+    items: rows.map((r) => ({
       id: r.id,
-      title: fixMojibake(r.title),
+      title: r.title,
       url: r.url,
       publisher: r.publisher,
       source: r.source,
@@ -352,6 +335,6 @@ export async function listNews(opts: {
     })),
     total,
     hasMore: page * pageSize < total,
-    publishers,
+    publishers: publishers.length,
   }
 }

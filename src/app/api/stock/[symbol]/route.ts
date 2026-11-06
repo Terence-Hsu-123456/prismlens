@@ -20,10 +20,41 @@ const pick = (o: any, keys: string[]) => {
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params
-  const sym = decodeURIComponent(symbol).toUpperCase()
+  let sym = decodeURIComponent(symbol).toUpperCase()
   const langRaw = req.nextUrl.searchParams.get('lang') ?? 'zh-CN'
   const lang = ['zh-CN', 'en-US', 'ja-JP'].includes(langRaw) ? langRaw : 'zh-CN'
   const u = UNIVERSE_BY_SYMBOL[sym]
+
+  // 韩国 KOSPI/KOSDAQ 后缀自动回退：TV 全球同步源无法区分板块，
+  // 统一存为 .KS；Yahoo 无报价时自动尝试 .KQ（KOSDAQ），并把成功后缀写回公司池
+  async function resolveKrSymbol(): Promise<void> {
+    if (!/^\d{6}\.KS$/.test(sym)) return
+    try {
+      const q = await getQuotes([sym])
+      if (q[sym] && typeof q[sym]?.regularMarketPrice === 'number') return
+    } catch { /* fallthrough */ }
+    const alt = sym.replace(/\.KS$/, '.KQ')
+    try {
+      const q2 = await getQuotes([alt])
+      if (q2[alt] && typeof q2[alt]?.regularMarketPrice === 'number') {
+        try {
+          const old = await db.screenCompany.findUnique({ where: { symbol: sym } })
+          if (old) {
+            await db.screenCompany.delete({ where: { symbol: sym } }).catch(() => {})
+            await db.screenCompany.upsert({
+              where: { symbol: alt },
+              create: { ...old, symbol: alt, seenAt: new Date(), updatedAt: new Date() },
+              update: { seenAt: new Date() },
+            })
+          }
+        } catch { /* DB 更新失败不影响查询 */ }
+        sym = alt
+      }
+    } catch { /* ignore */ }
+  }
+  try {
+    await resolveKrSymbol()
+  } catch { /* ignore */ }
 
   try {
     const data = await cached(`stock:${sym}:${lang}`, 300_000, async () => {

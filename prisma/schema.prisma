@@ -1,6 +1,5 @@
 generator client {
   provider      = "prisma-client-js"
-  // 本地 = native；Vercel（Amazon Linux 2023 / OpenSSL 3）需要额外引擎包
   binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
@@ -113,25 +112,29 @@ model SyncState {
   info String   @default("")
 }
 
-// 一级市场融资轮次（天使轮/VC/PE，公开报道整理，随市场动态补充）
+// 一级市场融资轮次（天使轮/VC/PE）：公开报道种子 + AI 资讯抓取自动入库，随市场动态补充
 model FundingRound {
   id            String   @id @default(cuid())
   company       String // 公司名（中文）
   companyEn     String   @default("")
-  market        String // CN | US | EU | JP | IN | OTHER
+  market        String // CN | US | EU | JP | KR | IN | SEA | LATAM | MEA | OTHER
   sector        String // 行业 key（同 ScreenCompany）
-  stage         String // angel | seed | a | b | c | pe | preipo
-  roundLabel    String // 天使轮 / A轮 / B轮 / C轮 / PE轮 / Pre-IPO（展示用）
+  stage         String // angel | seed | a | b | c | d | e | f | pe | preipo
+  roundLabel    String // 天使轮 / A轮 / B轮 / C轮 / D轮 / PE轮 / Pre-IPO（展示用）
   date          String // 披露时间 YYYY-MM
   amountUsd     Float? // 披露金额（美元）；未披露为 null
   valuationUsd  Float? // 投后估值（美元，约）；未披露为 null
   leadInvestors String   @default("") // 领投方
   desc          String   @default("") // 一句话简介
   tags          String   @default("[]") // JSON string[]
+  source        String   @default("seed") // seed（公开报道整理）| ai（AI 资讯抓取）
+  url           String   @default("") // 消息来源链接（AI 抓取时）
+  publisher     String   @default("") // 消息来源媒体（AI 抓取时）
   createdAt     DateTime @default(now())
 
   @@index([stage, date])
   @@index([market])
+  @@index([source])
 }
 
 // 企业（覆盖一级市场天使/VC/PE 与二级市场上市公司）

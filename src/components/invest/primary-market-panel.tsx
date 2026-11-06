@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, Rocket } from 'lucide-react'
+import { Loader2, Rocket, Sparkles } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useI18n } from '@/hooks/use-i18n'
@@ -22,10 +22,12 @@ type Round = {
   leadInvestors: string
   desc: string
   tags: string[]
+  source?: string
+  publisher?: string
 }
 type PmData = {
   rounds: Round[]
-  stats: { companies: number; totalAmount: number; medianValuation: number | null; latest: string }
+  stats: { companies: number; totalAmount: number; medianValuation: number | null; latest: string; aiCount?: number; byStage?: Record<string, number>; byMarket?: Record<string, number> }
 }
 
 const STAGE_CLS: Record<string, string> = {
@@ -34,6 +36,9 @@ const STAGE_CLS: Record<string, string> = {
   a: 'border-emerald-300 bg-emerald-50 text-emerald-800',
   b: 'border-amber-300 bg-amber-50 text-amber-800',
   c: 'border-orange-300 bg-orange-50 text-orange-800',
+  d: 'border-orange-400 bg-orange-100 text-orange-900',
+  e: 'border-rose-200 bg-rose-50 text-rose-700',
+  f: 'border-rose-300 bg-rose-100 text-rose-800',
   pe: 'border-rose-300 bg-rose-50 text-rose-800',
   preipo: 'border-stone-300 bg-stone-100 text-stone-700',
 }
@@ -43,10 +48,17 @@ const STAGE_KEY: Record<string, DictKey> = {
   a: 'pm.stageA',
   b: 'pm.stageB',
   c: 'pm.stageC',
+  d: 'pm.stageD',
+  e: 'pm.stageE',
+  f: 'pm.stageF',
   pe: 'pm.stagePE',
   preipo: 'pm.stagePreIPO',
 }
-const MK_KEY: Record<string, DictKey> = { CN: 'pm.mkCN', US: 'pm.mkUS', EU: 'pm.mkEU', JP: 'pm.mkOther', IN: 'pm.mkOther', OTHER: 'pm.mkOther' }
+const MK_KEY: Record<string, DictKey> = {
+  CN: 'pm.mkCN', US: 'pm.mkUS', EU: 'pm.mkEU', JP: 'pm.mkJP', KR: 'pm.mkKR',
+  IN: 'pm.mkIN', SEA: 'pm.mkSEA', LATAM: 'pm.mkLATAM', MEA: 'pm.mkMEA', OTHER: 'pm.mkOther',
+}
+const MK_ORDER = ['CN', 'US', 'EU', 'JP', 'KR', 'IN', 'SEA', 'LATAM', 'MEA']
 const SECTOR_KEY: Record<string, DictKey> = {
   tech: 'sec.tech',
   consumer: 'sec.consumer',
@@ -59,7 +71,7 @@ const SECTOR_KEY: Record<string, DictKey> = {
   comm: 'sec.comm',
   realestate: 'sec.realestate',
 }
-const STAGE_ORDER = ['angel', 'a', 'b', 'c', 'pe', 'preipo']
+const STAGE_ORDER = ['angel', 'a', 'b', 'c', 'd', 'e', 'f', 'pe', 'preipo']
 
 function fmtUsd(v: number | null): string {
   if (v == null || !isFinite(v)) return '—'
@@ -95,8 +107,9 @@ export default function PrimaryMarketPanel() {
 
   const rounds = data?.rounds ?? []
   const stageOpts = useMemo(() => STAGE_ORDER.filter((s) => rounds.some((r) => r.stage === s || (s === 'angel' && r.stage === 'seed'))), [rounds])
-  const mkOpts = useMemo(() => ['CN', 'US', 'EU', 'IN'].filter((m) => rounds.some((r) => r.market === m)), [rounds])
+  const mkOpts = useMemo(() => MK_ORDER.filter((m) => rounds.some((r) => r.market === m)), [rounds])
   const sectorOpts = useMemo(() => Array.from(new Set(rounds.map((r) => r.sector))), [rounds])
+  const aiCount = data?.stats.aiCount ?? 0
 
   const filtered = useMemo(
     () =>
@@ -145,6 +158,12 @@ export default function PrimaryMarketPanel() {
         {stat(t('pm.medianVal'), data ? fmtUsd(data.stats.medianValuation) : '—')}
         {stat(t('pm.recent'), data?.stats.latest ?? '—')}
       </div>
+      {aiCount > 0 && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+          <Sparkles className="mr-1 inline h-3 w-3" />
+          {t('pm.aiHint').replace('{n}', String(aiCount))}
+        </p>
+      )}
 
       {/* 筛选 */}
       <Card className="border-stone-200 bg-white">
@@ -196,6 +215,9 @@ export default function PrimaryMarketPanel() {
                       <TableCell className="max-w-64">
                         <div className="flex items-baseline gap-2">
                           <span className="truncate text-[13px] font-semibold text-stone-900">{r.company}</span>
+                          {r.source === 'ai' && (
+                            <span className="shrink-0 rounded bg-amber-100 px-1 text-[9px] font-bold text-amber-800">AI</span>
+                          )}
                           <span className="hidden truncate text-[11px] text-stone-400 sm:inline">{r.companyEn}</span>
                         </div>
                         <div className="mt-0.5 line-clamp-1 text-[11px] leading-relaxed text-stone-500">{r.desc}</div>

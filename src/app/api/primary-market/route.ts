@@ -1,37 +1,33 @@
-// 一级市场融资轮次（天使轮/VC/PE）：首次访问自动播种公开报道整理数据，
-// 之后动态返回（新轮次入库后立即展示）
+// 一级市场融资轮次（天使轮/VC/PE）：种子播种 + AI 资讯抓取动态入库（primary-sync），
+// 新融资事件随同步自动进入面板
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { FUNDING_SEED } from '@/lib/primary-seed'
+import { ensurePrimarySeed, ensurePrimarySync } from '@/lib/primary-sync'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-async function ensureSeed(): Promise<void> {
-  const n = await db.fundingRound.count()
-  if (n > 0) return
-  await db.fundingRound.createMany({
-    data: FUNDING_SEED.map((f) => ({
-      company: f.company,
-      companyEn: f.companyEn,
-      market: f.market,
-      sector: f.sector,
-      stage: f.stage,
-      roundLabel: f.roundLabel,
-      date: f.date,
-      amountUsd: f.amountUsd,
-      valuationUsd: f.valuationUsd,
-      leadInvestors: f.leadInvestors,
-      desc: f.desc,
-      tags: JSON.stringify(f.tags),
-    })),
-  })
-}
-
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
-    await ensureSeed()
-    const rows = await db.fundingRound.findMany({ orderBy: [{ date: 'desc' }, { amountUsd: 'desc' }] })
+    await ensurePrimarySeed()
+    // AI 融资资讯同步（TTL 12h，fire-and-forget 不阻塞响应）
+    // Vercel 只读快照部署：AI 抓取依赖 Z.ai 平台 SDK，部署环境跳过，直接读打包数据
+    if (!process.env.VERCEL) void ensurePrimarySync()
+
+    const sp = req.nextUrl.searchParams
+    const limit = Math.min(Math.max(parseInt(sp.get('limit') ?? '1000', 10) || 1000, 20), 2000)
+
+    const [rows, total, sumAgg, valRows, byStage, byMarket, aiCount, latestRow] = await Promise.all([
+      db.fundingRound.findMany({ orderBy: [{ date: 'desc' }, { amountUsd: 'desc' }], take: limit }),
+      db.fundingRound.count(),
+      db.fundingRound.aggregate({ _sum: { amountUsd: true } }),
+      db.fundingRound.findMany({ where: { valuationUsd: { not: null } }, select: { valuationUsd: true }, orderBy: { valuationUsd: 'asc' } }),
+      db.fundingRound.groupBy({ by: ['stage'], _count: true }),
+      db.fundingRound.groupBy({ by: ['market'], _count: true }),
+      db.fundingRound.count({ where: { source: 'ai' } }),
+      db.fundingRound.findFirst({ orderBy: [{ date: 'desc' }, { amountUsd: 'desc' }], select: { date: true } }),
+    ])
+
     const rounds = rows.map((r) => {
       let tags: string[] = []
       try {
@@ -41,21 +37,20 @@ export async function GET(_req: NextRequest) {
       }
       return { ...r, tags }
     })
-    const amounts = rounds.map((r) => r.amountUsd).filter((v): v is number => v != null)
-    const vals = rounds.map((r) => r.valuationUsd).filter((v): v is number => v != null)
-    const median = (arr: number[]) => {
-      if (!arr.length) return null
-      const s = [...arr].sort((a, b) => a - b)
-      return s[Math.floor(s.length / 2)]
-    }
+    const vals = valRows.map((r) => r.valuationUsd).filter((v): v is number => v != null)
+    const median = vals.length ? vals[Math.floor(vals.length / 2)] : null
+
     return NextResponse.json(
       {
         rounds,
         stats: {
-          companies: rounds.length,
-          totalAmount: amounts.reduce((a, b) => a + b, 0),
-          medianValuation: median(vals),
-          latest: rounds[0]?.date ?? '',
+          companies: total,
+          totalAmount: sumAgg._sum.amountUsd ?? 0,
+          medianValuation: median,
+          latest: latestRow?.date ?? '',
+          aiCount,
+          byStage: Object.fromEntries(byStage.map((g) => [g.stage, g._count])),
+          byMarket: Object.fromEntries(byMarket.map((g) => [g.market, g._count])),
         },
       },
       { headers: { 'Cache-Control': 'no-store' } }

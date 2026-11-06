@@ -126,12 +126,23 @@ export function fmtChartFull(ts: number, lang: Lang, intraday: boolean, timeZone
 export const FLAGS: Record<string, string> = {
   US: '🇺🇸', CN: '🇨🇳', HK: '🇭🇰', JP: '🇯🇵', KR: '🇰🇷', IN: '🇮🇳',
   DE: '🇩🇪', FR: '🇫🇷', GB: '🇬🇧', CH: '🇨🇭', NL: '🇳🇱', DK: '🇩🇰', SE: '🇸🇪', EU: '🇪🇺',
+  IT: '🇮🇹', ES: '🇪🇸', NO: '🇳🇴', FI: '🇫🇮', PL: '🇵🇱', TR: '🇹🇷', BE: '🇧🇪', AT: '🇦🇹',
+  GR: '🇬🇷', PT: '🇵🇹', IE: '🇮🇪', CZ: '🇨🇿',
+  TW: '🇹🇼', SG: '🇸🇬', AU: '🇦🇺', NZ: '🇳🇿', ID: '🇮🇩', MY: '🇲🇾', TH: '🇹🇭', VN: '🇻🇳', PH: '🇵🇭',
+  CA: '🇨🇦', BR: '🇧🇷', MX: '🇲🇽', CL: '🇨🇱',
+  IL: '🇮🇱', QA: '🇶🇦', AE: '🇦🇪', SA: '🇸🇦', ZA: '🇿🇦',
+  AP: '🌏', AM: '🌎', MEA: '🌍',
 }
 
 // 筛选用近似汇率（仅用于跨市场市值比较，展示仍用原币种）
 export const FX_TO_USD: Record<string, number> = {
   USD: 1, CNY: 0.14, HKD: 0.128, JPY: 0.0066, KRW: 0.00072, INR: 0.0115,
   EUR: 1.08, GBP: 1.27, CHF: 1.13, DKK: 0.145, TWD: 0.031, AUD: 0.66,
+  // 全球扩展（TradingView 全市场同步用，近似汇率仅作筛选排序）
+  SEK: 0.095, NOK: 0.092, PLN: 0.25, CZK: 0.043, TRY: 0.03, HUF: 0.0028,
+  SGD: 0.74, NZD: 0.6, IDR: 0.000062, MYR: 0.22, THB: 0.0285, VND: 0.00004, PHP: 0.0175,
+  CAD: 0.73, BRL: 0.185, MXN: 0.049, CLP: 0.00105, ARS: 0.001,
+  ILS: 0.27, QAR: 0.2747, AED: 0.2723, SAR: 0.2667, KWD: 3.26, ZAR: 0.055, EGP: 0.021,
 }
 
 export function toUSD(v: number | null | undefined, currency: string): number | null {

@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
 
     const system = `You convert an investor's natural-language request into STRICT JSON screening criteria. Output raw JSON only, no markdown, with this schema:
 {
-  "market": "ALL" | "US" | "CN" | "HK" | "JP" | "KR" | "IN" | "EU",
+  "market": "ALL" | "US" | "CN" | "HK" | "JP" | "KR" | "IN" | "EU" | "AP" | "AM" | "MEA",
   "sectors": string[],   // subset of: tech, consumer, finance, health, energy, industrial, materials, utility, comm, realestate
   "stage": "ALL" | "startup" | "growth" | "mature" | "turnaround",
   "capMinUSD": number | null,
@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
   "keywords": string[],  // qualitative keywords to match company names/industry/notes; use the user's language + useful synonyms
   "note": string         // 1-2 sentences explaining your interpretation, written in ${langName(lang)}
 }
+Market notes: US=United States, CN=China A-shares, HK=Hong Kong, JP=Japan, KR=South Korea, IN=India, EU=Europe, AP=other Asia-Pacific (Taiwan/Singapore/Australia/SE Asia), AM=other Americas (Canada/Brazil/Mexico/Chile), MEA=Middle East & Africa (Israel/Qatar/UAE).
 Rules: if the user does not specify something, use "ALL" / null. Keywords should be short phrases (e.g. "白酒", "AI", "高股息", "白酒", "半导体设备"). capMinUSD uses USD approximations. Examples: "高ROE" → roeMin 15; "低估便宜" → peMax 20, pbMax 3; "高分红" → divMin 3. Output raw JSON only.`
 
     const criteria = await aiJson(system, `User request: ${q}`)

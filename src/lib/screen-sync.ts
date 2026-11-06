@@ -1,7 +1,8 @@
 // 全市场公司池同步编排：
-// - 首次/定时（TTL 30min）后台同步：A股（新浪全量+腾讯股息率+行业映射）、港股（HKEX官方名单+腾讯行情）、美股（Nasdaq官方）、精选池（日韩印欧等）
+// - 首次/定时（TTL 30min）后台同步：A股（新浪全量+腾讯股息率+行业映射）、港股（HKEX官方名单+腾讯行情）、美股（Nasdaq官方）、
+//   全球其他（TradingView Scanner ~35 国全量：日/韩/印/欧/亚太/美洲/中东非）、精选池（定性标签增强）
 // - SQLite 批量 upsert（原始 SQL，秒级写入万级行）
-// - 退市清理：bulk 源本轮未见到的行删除；新股自动入库 —— 动态化
+// - 退市清理：各市场本轮未见到的行删除；新股自动入库 —— 动态化
 import { db } from '@/lib/db'
 import { UNIVERSE, MARKET_CURRENCY } from './universe'
 import { getQuotes } from './quotes'
@@ -11,6 +12,7 @@ import {
   fetchCnBulk,
   fetchHkList,
   fetchUsBulk,
+  fetchGlobalBulk,
   tencentABatch,
   tencentHkBatch,
   sinaIndustryMap,
@@ -21,7 +23,7 @@ import {
 
 export type SyncResult = {
   ok: boolean
-  counts: { CN: number; HK: number; US: number; curated: number }
+  counts: { CN: number; HK: number; US: number; global: number; curated: number }
   errors: string[]
   durationMs: number
   at: number
@@ -48,7 +50,7 @@ async function setState(key: string, info: string): Promise<void> {
 }
 
 export async function getScreenStatus() {
-  const [last, ind, hkList, total, cn, hk, us, curated] = await Promise.all([
+  const [last, ind, hkList, total, cn, hk, us, jp, kr, inn, eu, ap, am, mea, curated] = await Promise.all([
     getState('screen:lastSync'),
     getState('cn:industry'),
     getState('hk:list'),
@@ -56,6 +58,13 @@ export async function getScreenStatus() {
     db.screenCompany.count({ where: { market: 'CN' } }),
     db.screenCompany.count({ where: { market: 'HK' } }),
     db.screenCompany.count({ where: { market: 'US' } }),
+    db.screenCompany.count({ where: { market: 'JP' } }),
+    db.screenCompany.count({ where: { market: 'KR' } }),
+    db.screenCompany.count({ where: { market: 'IN' } }),
+    db.screenCompany.count({ where: { market: 'EU' } }),
+    db.screenCompany.count({ where: { market: 'AP' } }),
+    db.screenCompany.count({ where: { market: 'AM' } }),
+    db.screenCompany.count({ where: { market: 'MEA' } }),
     db.screenCompany.count({ where: { source: 'curated' } }),
   ])
   return {
@@ -64,7 +73,7 @@ export async function getScreenStatus() {
     industrySyncedAt: ind?.at ?? 0,
     hkListSyncedAt: hkList?.at ?? 0,
     total,
-    byMarket: { CN: cn, HK: hk, US: us, curated },
+    byMarket: { CN: cn, HK: hk, US: us, JP: jp, KR: kr, IN: inn, EU: eu, AP: ap, AM: am, MEA: mea, curated },
     syncing: running != null,
   }
 }
@@ -219,7 +228,35 @@ async function syncUS(start: Date): Promise<number> {
   return vals.length
 }
 
-// 精选池：日韩印欧等无全量源的市场 + 带定性标签的核心公司（tags/nameJa/人工阶段保留）
+// 全球其他市场（TradingView ~35 国全量）：按市场 key 分组 upsert + 退市清理
+const GLOBAL_MARKETS = ['JP', 'KR', 'IN', 'EU', 'AP', 'AM', 'MEA']
+// 单市场抓取失败（TV 限流抖动）时，仅清理超过此时限未见到的行（自愈，不清空健康数据）
+const GLOBAL_STALE_GRACE = 3 * 3600_000
+
+async function syncGlobalTV(start: Date): Promise<number> {
+  const { byMarket, errors } = await fetchGlobalBulk()
+  const seenAt = start.toISOString()
+  let total = 0
+  for (const mk of GLOBAL_MARKETS) {
+    const rows = byMarket[mk]
+    if (rows && rows.length) {
+      const vals = rows.map((r) => bulkToVal(r, seenAt))
+      await upsertRaw(vals)
+      await pruneStale(mk, start)
+      total += vals.length
+      console.log(`[screen-sync] global/${mk}: ${vals.length} rows`)
+    } else {
+      // 本轮抓取失败：只清理超过宽限期的旧行（防残留垃圾长期滞留）
+      const before = new Date(start.getTime() - GLOBAL_STALE_GRACE)
+      const pruned = await pruneStale(mk, before)
+      if (pruned) console.log(`[screen-sync] global/${mk}: fetch failed, pruned ${pruned} stale rows`)
+    }
+  }
+  if (errors.length && total === 0) throw new Error(errors.join('; ').slice(0, 200))
+  return total
+}
+
+// 精选池：带定性标签的核心公司（tags/nameJa/人工阶段保留；全球全量同步之上的增强层）
 async function syncCurated(start: Date): Promise<number> {
   const syms = UNIVERSE.map((u) => u.s)
   let quotes: Record<string, any> = {}
@@ -264,7 +301,7 @@ export async function syncAll(force = false): Promise<SyncResult> {
   running = (async (): Promise<SyncResult> => {
     const t0 = Date.now()
     const start = new Date()
-    const counts = { CN: 0, HK: 0, US: 0, curated: 0 }
+    const counts = { CN: 0, HK: 0, US: 0, global: 0, curated: 0 }
     const errors: string[] = []
     const step = async (k: keyof typeof counts, fn: () => Promise<number>) => {
       const t = Date.now()
@@ -279,10 +316,11 @@ export async function syncAll(force = false): Promise<SyncResult> {
     await step('CN', () => syncCN(start))
     await step('HK', () => syncHK(start))
     await step('US', () => syncUS(start))
+    await step('global', () => syncGlobalTV(start))
     await step('curated', () => syncCurated(start))
     const at = Date.now()
-    const info = `CN=${counts.CN} HK=${counts.HK} US=${counts.US} curated=${counts.curated}${errors.length ? ' errors=' + errors.length : ''}`
-    if (!errors.length || counts.CN + counts.HK + counts.US + counts.curated > 0) {
+    const info = `CN=${counts.CN} HK=${counts.HK} US=${counts.US} global=${counts.global} curated=${counts.curated}${errors.length ? ' errors=' + errors.length : ''}`
+    if (!errors.length || counts.CN + counts.HK + counts.US + counts.global + counts.curated > 0) {
       await setState('screen:lastSync', info)
     }
     // 泵一轮财务指标（后台渐进，写回 DB）
@@ -297,7 +335,7 @@ export async function syncAll(force = false): Promise<SyncResult> {
     } catch { /* ignore */ }
     return { ok: errors.length < 4, counts, errors, durationMs: Date.now() - t0, at }
   })()
-    .catch((e: any): SyncResult => ({ ok: false, counts: { CN: 0, HK: 0, US: 0, curated: 0 }, errors: [String(e?.message ?? e)], durationMs: 0, at: Date.now() }))
+    .catch((e: any): SyncResult => ({ ok: false, counts: { CN: 0, HK: 0, US: 0, global: 0, curated: 0 }, errors: [String(e?.message ?? e)], durationMs: 0, at: Date.now() }))
     .finally(() => {
       running = null
     })

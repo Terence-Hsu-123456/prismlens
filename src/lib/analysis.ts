@@ -1,5 +1,4 @@
 // AI 三层投研分析引擎：真实数据 → LLM 结构化输出
-import ZAI from 'z-ai-web-dev-sdk'
 import { cached } from './cache'
 import { getQuotes, getChart } from './quotes'
 import { yahooQuoteSummary, yahooNews } from './yahoo'
@@ -7,7 +6,7 @@ import { computeTech } from './quant'
 import { UNIVERSE_BY_SYMBOL, PULSE } from './universe'
 import { langName, type Lang } from './i18n'
 
-// AI 接口走标准 OpenAI 协议，凭据由环境变量注入，不再绑定任何单一托管平台
+// AI 接口走标准 OpenAI 协议，凭据由环境变量注入，不绑定单一托管平台
 const AI_BASE = (
   process.env.ZAI_BASE_URL ||
   process.env.OPENAI_BASE_URL ||

@@ -17,6 +17,11 @@ import { fmtBigMoney, fmtNum, fmtPct, fmtPrice, FLAGS } from '@/lib/format'
 import { MARKETS, SECTORS, STAGES, type SectorKey, type StageKey } from '@/lib/universe'
 import type { DictKey } from '@/lib/i18n'
 
+// 中文输入法组合中（Enter 用于选字）—— 忽略回车提交
+function isComposing(e: React.KeyboardEvent): boolean {
+  return (e.nativeEvent as any).isComposing === true || e.keyCode === 229
+}
+
 type ScreenRow = {
   symbol: string
   nameZh: string
@@ -117,10 +122,10 @@ export default function ScreenerPanel() {
   const [pm, setPm] = useState('ALL')
   const [rev, setRev] = useState('ALL')
   const [div, setDiv] = useState('ALL')
-  // 定性关键词：输入防抖 + 回车立即生效
+  // 定性关键词：输入防抖 + 回车立即生效（IME 组合中的回车不触发）
   const [kwInput, setKwInput] = useState('')
   const [kw, setKw] = useState('')
-  const [sort, setSort] = useState<{ key: 'chg' | 'mcap' | 'pe' | 'pb' | 'roe' | 'div'; dir: 'desc' | 'asc' } | null>(null)
+  const [sort, setSort] = useState<{ key: 'chg' | 'mcap' | 'pe' | 'pb' | 'roe' | 'pm' | 'rev' | 'div'; dir: 'desc' | 'asc' } | null>(null)
 
   const [semOpen, setSemOpen] = useState(false)
   const [semQ, setSemQ] = useState('')
@@ -166,7 +171,23 @@ export default function ScreenerPanel() {
   const live = useLive<ScreenerData>(`/api/screener?${qs}&limit=${PAGE_SIZE}&offset=0`, 60_000)
 
   const baseRows = override ?? live.data?.rows ?? []
-  const shown = useMemo(() => dedupRows([...baseRows, ...extra]), [baseRows, extra])
+  const shown = useMemo(() => {
+    const rows = dedupRows([...baseRows, ...extra])
+    if (!sort) return rows
+    const val = (r: ScreenRow): number => {
+      switch (sort.key) {
+        case 'chg': return r.changePercent ?? -Infinity
+        case 'mcap': return r.capUsd ?? r.marketCap ?? -Infinity
+        case 'pe': return r.pe != null && r.pe > 0 ? r.pe : Infinity
+        case 'pb': return r.pb != null && r.pb > 0 ? r.pb : Infinity
+        case 'roe': return r.roe ?? -Infinity
+        case 'pm': return r.profitMargin ?? -Infinity
+        case 'rev': return r.revenueGrowth ?? -Infinity
+        case 'div': return r.dividendYield ?? -Infinity
+      }
+    }
+    return [...rows].sort((a, b) => (sort.dir === 'desc' ? val(b) - val(a) : val(a) - val(b)))
+  }, [baseRows, extra, sort])
   const total = override ? override.length : live.data?.total ?? 0
   const universe = live.data?.universeSize ?? 0
   const syncing = !!live.data?.syncing
@@ -260,10 +281,10 @@ export default function ScreenerPanel() {
     }
   }
 
-  const sortBtn = (key: 'chg' | 'mcap' | 'pe' | 'pb' | 'roe' | 'div', label: string) => (
+  const sortBtn = (key: 'chg' | 'mcap' | 'pe' | 'pb' | 'roe' | 'pm' | 'rev' | 'div', label: string) => (
     <button
       onClick={() => setSort((s) => (s && s.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }))}
-      className={`inline-flex items-center gap-0.5 hover:text-amber-800 ${sort?.key === key ? 'text-amber-800' : ''}`}
+      className={`inline-flex items-center gap-0.5 hover:text-stone-900 ${sort?.key === key ? 'font-bold text-amber-900' : 'text-stone-700'}`}
     >
       {label}
       {sort?.key === key && <span className="text-[9px]">{sort.dir === 'desc' ? '▼' : '▲'}</span>}
@@ -275,7 +296,7 @@ export default function ScreenerPanel() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-stone-900">{t('sc.title')}</h2>
-          <p className="mt-0.5 text-xs text-stone-500">{t('sc.desc')}</p>
+          <p className="mt-0.5 text-xs font-medium text-stone-600">{t('sc.desc')}</p>
         </div>
         <Button
           variant="outline"
@@ -315,14 +336,14 @@ export default function ScreenerPanel() {
               value={semQ}
               onChange={(e) => setSemQ(e.target.value)}
               onKeyDown={(e) => {
-                // 回车（非 Shift）直接运行 AI 筛选
-                if (e.key === 'Enter' && !e.shiftKey) {
+                // 回车（非 Shift、非 IME 组合中）直接运行 AI 筛选
+                if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                   e.preventDefault()
                   if (!semBusy && semQ.trim()) void runSemantic()
                 }
               }}
               placeholder={t('sc.semanticPh')}
-              className="min-h-20 border-stone-200 bg-white text-sm focus-visible:ring-amber-700/30"
+              className="min-h-20 border-stone-300 bg-white text-sm font-medium text-stone-800 placeholder:font-normal placeholder:text-stone-500 focus-visible:ring-amber-700/30"
             />
             <div className="flex items-center gap-2">
               <Button
@@ -554,17 +575,17 @@ export default function ScreenerPanel() {
               value={kwInput}
               onChange={(e) => { setKwInput(e.target.value); applyKw(e.target.value); clearManual() }}
               onKeyDown={(e) => {
-                // 回车立即筛选（不等防抖）
-                if (e.key === 'Enter') {
+                // 回车立即筛选（不等防抖；IME 组合中的回车不触发）
+                if (e.key === 'Enter' && !isComposing(e)) {
                   e.preventDefault()
                   kwNow()
                   ;(e.target as HTMLInputElement).blur()
                 }
               }}
               placeholder={t('sc.kwPh')}
-              className="h-9 border-stone-200 bg-white text-sm"
+              className="h-9 border-stone-300 bg-white text-sm font-medium text-stone-800 placeholder:font-normal placeholder:text-stone-500"
             />
-            <p className="text-[11px] text-stone-400">{t('sc.kwHint')}</p>
+            <p className="text-[11px] text-stone-500">{t('sc.kwHint')}</p>
           </div>
           <div className="flex items-end sm:col-span-2 lg:col-span-4">
             <Button variant="ghost" size="sm" onClick={reset} className="gap-1.5 text-xs text-stone-500 hover:text-stone-800">
@@ -578,17 +599,17 @@ export default function ScreenerPanel() {
       {/* 结果表 */}
       <Card className="border-stone-200 bg-white">
         <CardContent className="p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-600">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-stone-700">
             <span>
               {t('sc.universe')} <span className="font-bold text-stone-900">{universe.toLocaleString()}</span>
-              <span className="text-stone-400"> · {t('sc.dynamic')}</span>
+              <span className="text-stone-600"> · {t('sc.dynamic')}</span>
             </span>
             <span className="flex items-center gap-1">
               <MousePointerClick className="h-3 w-3" />
               {t('sc.hint')}
             </span>
           </div>
-          <div className="mb-3 text-xs text-stone-600">
+          <div className="mb-3 text-xs font-medium text-stone-700">
             {t('sc.results')}：
             <span className="font-bold text-amber-800">{total.toLocaleString()}</span>
             <span className="ml-1">{t('sc.count')}</span>
@@ -610,20 +631,22 @@ export default function ScreenerPanel() {
           ) : (
             <>
               <div className="overflow-x-auto rounded-xl border border-stone-200 pretty-scroll">
-                <Table className="min-w-[880px]">
+                <Table className="min-w-[1020px]">
                   <TableHeader className="sticky top-0 z-10 bg-white">
                     <TableRow className="border-stone-200 hover:bg-transparent">
-                      <TableHead className="text-stone-600">{t('sc.col.name')}</TableHead>
-                      <TableHead className="text-stone-600">{t('sc.col.symbol')}</TableHead>
-                      <TableHead className="text-right text-stone-600">{t('sc.col.price')}</TableHead>
-                      <TableHead className="text-right text-stone-600">{sortBtn('chg', t('sc.col.chg'))}</TableHead>
-                      <TableHead className="text-right text-stone-600">{sortBtn('mcap', t('sc.col.mcap'))}</TableHead>
-                      <TableHead className="text-right text-stone-600">{sortBtn('pe', t('sc.col.pe'))}</TableHead>
-                      <TableHead className="text-right text-stone-600">{sortBtn('pb', t('sc.col.pb'))}</TableHead>
-                      <TableHead className="text-right text-stone-600">{sortBtn('roe', t('sc.col.roe'))}</TableHead>
-                      <TableHead className="hidden text-right text-stone-600 md:table-cell">{sortBtn('div', t('sc.col.div'))}</TableHead>
-                      <TableHead className="hidden text-stone-600 md:table-cell">{t('sc.col.stage')}</TableHead>
-                      <TableHead className="hidden text-stone-600 lg:table-cell">{t('sc.col.sector')}</TableHead>
+                      <TableHead className="font-semibold text-stone-800">{t('sc.col.name')}</TableHead>
+                      <TableHead className="font-semibold text-stone-800">{t('sc.col.symbol')}</TableHead>
+                      <TableHead className="text-right font-semibold text-stone-800">{t('sc.col.price')}</TableHead>
+                      <TableHead className="text-right font-semibold text-stone-800">{sortBtn('chg', t('sc.col.chg'))}</TableHead>
+                      <TableHead className="text-right font-semibold text-stone-800">{sortBtn('mcap', t('sc.col.mcap'))}</TableHead>
+                      <TableHead className="text-right font-semibold text-stone-800">{sortBtn('pe', t('sc.col.pe'))}</TableHead>
+                      <TableHead className="text-right font-semibold text-stone-800">{sortBtn('pb', t('sc.col.pb'))}</TableHead>
+                      <TableHead className="text-right font-semibold text-stone-800">{sortBtn('roe', t('sc.col.roe'))}</TableHead>
+                      <TableHead className="hidden text-right font-semibold text-stone-800 md:table-cell">{sortBtn('pm', t('sc.col.pm'))}</TableHead>
+                      <TableHead className="hidden text-right font-semibold text-stone-800 md:table-cell">{sortBtn('rev', t('sc.col.rev'))}</TableHead>
+                      <TableHead className="hidden text-right font-semibold text-stone-800 md:table-cell">{sortBtn('div', t('sc.col.div'))}</TableHead>
+                      <TableHead className="hidden font-semibold text-stone-800 md:table-cell">{t('sc.col.stage')}</TableHead>
+                      <TableHead className="hidden font-semibold text-stone-800 lg:table-cell">{t('sc.col.sector')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -641,26 +664,32 @@ export default function ScreenerPanel() {
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell className="font-mono text-[11px] text-stone-600">{r.symbol}</TableCell>
-                        <TableCell className="text-right text-[13px] tabular-nums text-stone-800">
+                        <TableCell className="font-mono text-[11px] text-stone-700">{r.symbol}</TableCell>
+                        <TableCell className="text-right text-[13px] font-medium tabular-nums text-stone-900">
                           {fmtPrice(r.price, r.currency, lang)}
                         </TableCell>
-                        <TableCell className={`text-right text-[13px] tabular-nums ${tone(r.changePercent)}`}>
+                        <TableCell className={`text-right text-[13px] font-medium tabular-nums ${tone(r.changePercent)}`}>
                           {fmtPct(r.changePercent)}
                         </TableCell>
-                        <TableCell className="text-right text-[13px] tabular-nums text-stone-700">
+                        <TableCell className="text-right text-[13px] tabular-nums text-stone-800">
                           {fmtBigMoney(r.marketCap, r.currency, lang)}
                         </TableCell>
-                        <TableCell className="text-right text-[13px] tabular-nums text-stone-700">
+                        <TableCell className="text-right text-[13px] font-medium tabular-nums text-stone-800">
                           {r.pe != null && r.pe > 0 ? r.pe.toFixed(1) : '—'}
                         </TableCell>
-                        <TableCell className="text-right text-[13px] tabular-nums text-stone-700">
+                        <TableCell className="text-right text-[13px] font-medium tabular-nums text-stone-800">
                           {r.pb != null && r.pb > 0 ? r.pb.toFixed(1) : '—'}
                         </TableCell>
-                        <TableCell className="text-right text-[13px] tabular-nums text-stone-700">
-                          {r.roe != null ? <span className={r.roe >= 15 ? 'font-semibold text-emerald-700' : ''}>{r.roe.toFixed(1)}%</span> : '—'}
+                        <TableCell className="text-right text-[13px] font-medium tabular-nums text-stone-800">
+                          {r.roe != null ? <span className={r.roe >= 15 ? 'font-bold text-emerald-700' : ''}>{r.roe.toFixed(1)}%</span> : '—'}
                         </TableCell>
-                        <TableCell className="hidden text-right text-[13px] tabular-nums text-stone-700 md:table-cell">
+                        <TableCell className="hidden text-right text-[13px] tabular-nums text-stone-800 md:table-cell">
+                          {r.profitMargin != null ? `${r.profitMargin.toFixed(1)}%` : '—'}
+                        </TableCell>
+                        <TableCell className="hidden text-right text-[13px] tabular-nums text-stone-800 md:table-cell">
+                          {r.revenueGrowth != null ? <span className={r.revenueGrowth >= 0 ? 'text-emerald-700' : 'text-rose-700'}>{fmtPct(r.revenueGrowth, 1)}</span> : '—'}
+                        </TableCell>
+                        <TableCell className="hidden text-right text-[13px] tabular-nums text-stone-800 md:table-cell">
                           {r.dividendYield != null ? fmtPct(r.dividendYield, 1) : '—'}
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
@@ -668,7 +697,7 @@ export default function ScreenerPanel() {
                             {t(STAGE_KEY[r.stage] ?? 'sc.stageMature')}
                           </span>
                         </TableCell>
-                        <TableCell className="hidden text-[12px] text-stone-600 lg:table-cell">
+                        <TableCell className="hidden text-[12px] font-medium text-stone-700 lg:table-cell">
                           {r.sector ? t(SECTOR_KEY[r.sector] ?? 'sec.tech') : '—'}
                         </TableCell>
                       </TableRow>
@@ -683,12 +712,12 @@ export default function ScreenerPanel() {
                     size="sm"
                     onClick={loadMore}
                     disabled={moreBusy}
-                    className="gap-1.5 border-stone-300 text-stone-700 hover:bg-stone-100"
+                    className="gap-1.5 border-stone-400 font-medium text-stone-800 hover:bg-stone-100"
                   >
                     {moreBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
                     {t('sc.loadMore')}
                   </Button>
-                  <span className="text-[11px] text-stone-500">
+                  <span className="text-[11px] font-medium text-stone-700">
                     {shown.length.toLocaleString()} / {total.toLocaleString()}
                   </span>
                 </div>
