@@ -27,10 +27,11 @@ export async function aiJson(system: string, user: string): Promise<any> {
         { role: 'user', content: user },
       ],
       temperature: 0.3,
+      max_tokens: 8000,
     }),
     cache: 'no-store',
   })
-  if (!res.ok) throw new Error(`AI_HTTP_${res.status}`)
+  if (!res.ok) throw new Error(`AI_HTTP_${res.status}:${(await res.text()).slice(0, 200)}`)
   const completion: any = await res.json()
   const text: string = completion?.choices?.[0]?.message?.content ?? ''
   const cleaned = text.replace(/```json/gi, '```').replace(/```/g, '')
@@ -216,7 +217,8 @@ export async function buildAnalysis(symbolRaw: string, lang: Lang) {
       engine: 'ai' as const,
       analysis,
     }
-  } catch {
+  } catch (e: any) {
+    console.error('[analysis] AI failed:', String(e?.message ?? e).slice(0, 300))
     // AI 服务不可用（如外部部署无凭证）→ 用真实数据的规则引擎生成报告，功能不中断
     return {
       symbol: data.symbol,
